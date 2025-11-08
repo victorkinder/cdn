@@ -31,6 +31,8 @@
    * Main init.
    */
   function start() {
+    logger.debug('Bootstrap starting.');
+
     if (isCrawler(window.navigator && window.navigator.userAgent)) {
       logger.debug('Detected crawler; script skipped.');
       return;
@@ -43,6 +45,8 @@
     const urlParams = captureParamsFromLocation(
       window.location && window.location.search,
     );
+    logger.debug('Captured URL params:', urlParams);
+
     let sessionParams = Object.keys(urlParams).length
       ? urlParams
       : readStoredParams();
@@ -58,12 +62,27 @@
     }
 
     activeSessionParams = sessionParams;
+    logger.debug('Session params ready:', activeSessionParams);
 
     const propagate = () => {
-      propagateAnchors(sessionParams, mxcodeFlagged, hasURLSupport);
-      propagateButtons(sessionParams, mxcodeFlagged, hasURLSupport);
-      propagateForms(sessionParams, mxcodeFlagged);
-      logger.debug('Parameter propagation completed.');
+      logger.debug('Propagation cycle started.');
+      const anchorsUpdated = propagateAnchors(
+        sessionParams,
+        mxcodeFlagged,
+        hasURLSupport,
+      );
+      const buttonsUpdated = propagateButtons(
+        sessionParams,
+        mxcodeFlagged,
+        hasURLSupport,
+      );
+      const formsUpdated = propagateForms(sessionParams, mxcodeFlagged);
+      logger.debug(
+        'Parameter propagation completed.',
+        `anchors=${anchorsUpdated}`,
+        `buttons=${buttonsUpdated}`,
+        `forms=${formsUpdated}`,
+      );
     };
 
     if (document.readyState === 'loading') {
@@ -394,8 +413,11 @@
 
   function propagateAnchors(params, pageMxcode, hasURLSupport) {
     const anchors = document.getElementsByTagName('a');
+    let inspected = 0;
+    let updatedCount = 0;
     for (let i = 0; i < anchors.length; i += 1) {
       const anchor = anchors[i];
+      inspected += 1;
       const href = anchor && anchor.getAttribute && anchor.getAttribute('href');
       if (
         !href ||
@@ -409,27 +431,33 @@
 
       try {
         const originalHash = anchor.hash || '';
-        const updated = appendParams(href, params, hasURLSupport);
-        if (updated) {
-          anchor.href = updated;
+        const updatedUrl = appendParams(href, params, hasURLSupport);
+        if (updatedUrl) {
+          anchor.href = updatedUrl;
           if (originalHash && anchor.hash !== originalHash) {
             anchor.hash = originalHash;
           }
+          updatedCount += 1;
         }
       } catch (err) {
         logger.warn('Failed updating anchor URL.', err);
       }
     }
+    logger.debug(`Anchors inspected=${inspected} updated=${updatedCount}`);
+    return updatedCount;
   }
 
   function propagateButtons(params, pageMxcode, hasURLSupport) {
     const buttons = document.getElementsByTagName('button');
+    let inspected = 0;
+    let updatedCount = 0;
     for (let i = 0; i < buttons.length; i += 1) {
       const button = buttons[i];
       const handler = button && button.onclick;
       if (typeof handler !== 'function') continue;
 
       try {
+        inspected += 1;
         const handlerString = handler.toString();
         const locationMatch = handlerString.match(
           /location\.href\s*=\s*['"`]([^'"`]+)['"`]/,
@@ -461,20 +489,26 @@
 
         if (rewritten) {
           button.onclick = rewritten;
+          updatedCount += 1;
         }
       } catch (err) {
         logger.warn('Failed inspecting button handler.', err);
       }
     }
+    logger.debug(`Buttons inspected=${inspected} updated=${updatedCount}`);
+    return updatedCount;
   }
 
   function propagateForms(params, pageMxcode) {
     const forms = document.getElementsByTagName('form');
+    let inspected = 0;
+    let inputsAdded = 0;
     for (let i = 0; i < forms.length; i += 1) {
       const form = forms[i];
       const shouldProcess =
         pageMxcode || hasMxcode(form.getAttribute('action') || '');
       if (!shouldProcess) continue;
+      inspected += 1;
       TRACK_KEYS.forEach((key) => {
         const value = params[key];
         if (value === undefined || value === null || value === '') return;
@@ -487,11 +521,14 @@
           input.name = mappedName;
           input.value = normalizeParamValue(key, value);
           form.appendChild(input);
+          inputsAdded += 1;
         } catch (err) {
           logger.warn('Failed appending hidden form input.', err);
         }
       });
     }
+    logger.debug(`Forms inspected=${inspected} inputsAdded=${inputsAdded}`);
+    return inputsAdded;
   }
 
   try {
