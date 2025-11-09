@@ -266,12 +266,10 @@
     if (!hasURLSupport) return true;
 
     try {
-      const urlObj = new URL(
-        targetUrl,
-        window.location && window.location.href,
-      );
-      const pageOrigin = window.location && window.location.origin;
-      return !pageOrigin || urlObj.origin === pageOrigin;
+      // Apenas valida a URL; domínios diferentes também devem ser processados.
+      // eslint-disable-next-line no-new
+      new URL(targetUrl, window.location && window.location.href);
+      return true;
     } catch (err) {
       console.warn(
         LOG_PREFIX,
