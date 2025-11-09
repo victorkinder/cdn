@@ -24,17 +24,19 @@
   const DESTINATION_KEY_MAP =
     (typeof window !== 'undefined' && window.__PRESSELL_KEY_MAP__) || {};
   let activeSessionParams = {};
-
-  const logger = createLogger('presell-param-script');
+  const LOG_PREFIX = '[presell-param-script]';
 
   /**
    * Main init.
    */
   function start() {
-    logger.debug('Bootstrap starting.');
+    console.log(LOG_PREFIX, 'Iniciando propagação de parâmetros.');
 
     if (isCrawler(window.navigator && window.navigator.userAgent)) {
-      logger.debug('Detected crawler; script skipped.');
+      console.log(
+        LOG_PREFIX,
+        'Agente identificado como crawler. Execução interrompida.',
+      );
       return;
     }
 
@@ -45,14 +47,17 @@
     const urlParams = captureParamsFromLocation(
       window.location && window.location.search,
     );
-    logger.debug('Captured URL params:', urlParams);
+    console.log(LOG_PREFIX, 'Parâmetros detectados na URL atual:', urlParams);
 
     let sessionParams = Object.keys(urlParams).length
       ? urlParams
       : readStoredParams();
 
     if (!sessionParams || !Object.keys(sessionParams).length) {
-      logger.debug('No tracked parameters found; nothing to propagate.');
+      console.log(
+        LOG_PREFIX,
+        'Nenhum parâmetro rastreado encontrado. Propagação não necessária.',
+      );
       return;
     }
 
@@ -62,10 +67,17 @@
     }
 
     activeSessionParams = sessionParams;
-    logger.debug('Session params ready:', activeSessionParams);
+    console.log(
+      LOG_PREFIX,
+      'Parâmetros ativos em sessão:',
+      activeSessionParams,
+    );
 
     const propagate = () => {
-      logger.debug('Propagation cycle started.');
+      console.log(
+        LOG_PREFIX,
+        'Iniciando ciclo de propagação para links, botões e forms.',
+      );
       const anchorsUpdated = propagateAnchors(
         sessionParams,
         mxcodeFlagged,
@@ -77,8 +89,9 @@
         hasURLSupport,
       );
       const formsUpdated = propagateForms(sessionParams, mxcodeFlagged);
-      logger.debug(
-        'Parameter propagation completed.',
+      console.log(
+        LOG_PREFIX,
+        'Propagação finalizada.',
         `anchors=${anchorsUpdated}`,
         `buttons=${buttonsUpdated}`,
         `forms=${formsUpdated}`,
@@ -90,29 +103,6 @@
     } else {
       propagate();
     }
-  }
-
-  /**
-   * Utilities
-   */
-  function createLogger(scope) {
-    const safeConsole = (window && window.console) || {};
-    return {
-      debug: (...args) => {
-        if (typeof safeConsole.debug === 'function') {
-          safeConsole.debug(`[${scope}]`, ...args);
-        } else if (typeof safeConsole.log === 'function') {
-          safeConsole.log(`[${scope}]`, ...args);
-        }
-      },
-      warn: (...args) => {
-        if (typeof safeConsole.warn === 'function') {
-          safeConsole.warn(`[${scope}]`, ...args);
-        } else if (typeof safeConsole.error === 'function') {
-          safeConsole.error(`[${scope}]`, ...args);
-        }
-      },
-    };
   }
 
   function isCrawler(userAgent) {
@@ -134,8 +124,9 @@
     try {
       parser = new URLSearchParams(search);
     } catch (err) {
-      logger.warn(
-        'URLSearchParams unavailable; falling back to manual parsing.',
+      console.warn(
+        LOG_PREFIX,
+        'URLSearchParams indisponível. Realizando parse manual.',
         err,
       );
       return manualParse(search);
@@ -284,7 +275,11 @@
       const parsed = JSON.parse(dataRaw);
       return parsed && typeof parsed === 'object' ? parsed : {};
     } catch (err) {
-      logger.warn('Failed reading stored parameters.', err);
+      console.warn(
+        LOG_PREFIX,
+        'Não foi possível ler parâmetros armazenados.',
+        err,
+      );
       return {};
     }
   }
@@ -297,7 +292,11 @@
         String(Date.now() + STORAGE_DURATION_MS),
       );
     } catch (err) {
-      logger.warn('Failed persisting parameters.', err);
+      console.warn(
+        LOG_PREFIX,
+        'Falha ao salvar parâmetros no localStorage.',
+        err,
+      );
     }
   }
 
@@ -314,7 +313,11 @@
       const pageOrigin = window.location && window.location.origin;
       return !pageOrigin || urlObj.origin === pageOrigin;
     } catch (err) {
-      logger.warn('Failed to parse target URL; skipping.', err);
+      console.warn(
+        LOG_PREFIX,
+        'Não foi possível analisar a URL alvo. Ignorando item.',
+        err,
+      );
       return false;
     }
   }
@@ -348,7 +351,11 @@
       });
       return urlObj.toString();
     } catch (err) {
-      logger.warn('URL API append failed; falling back.', err);
+      console.warn(
+        LOG_PREFIX,
+        'Falha ao anexar parâmetros via URL API. Usando fallback.',
+        err,
+      );
       return appendParamsManually(url, paramEntries);
     }
   }
@@ -391,7 +398,10 @@
       /^function\s*[^(]*\(([^)]*)\)\s*{([\s\S]*)}$/,
     );
     if (!match) {
-      logger.warn('Unable to parse button handler; keeping original.');
+      console.warn(
+        LOG_PREFIX,
+        'Não foi possível interpretar o handler do botão.',
+      );
       return null;
     }
     const argsString = match[1].trim();
@@ -406,7 +416,7 @@
       // eslint-disable-next-line no-new-func
       return Function.apply(null, [...argList, body]);
     } catch (err) {
-      logger.warn('Failed to rebuild button handler; keeping original.', err);
+      console.warn(LOG_PREFIX, 'Erro ao reconstruir o handler do botão.', err);
       return originalHandler;
     }
   }
@@ -440,10 +450,13 @@
           updatedCount += 1;
         }
       } catch (err) {
-        logger.warn('Failed updating anchor URL.', err);
+        console.warn(LOG_PREFIX, 'Falha ao atualizar URL do link.', err);
       }
     }
-    logger.debug(`Anchors inspected=${inspected} updated=${updatedCount}`);
+    console.log(
+      LOG_PREFIX,
+      `Links analisados=${inspected} atualizados=${updatedCount}`,
+    );
     return updatedCount;
   }
 
@@ -492,10 +505,17 @@
           updatedCount += 1;
         }
       } catch (err) {
-        logger.warn('Failed inspecting button handler.', err);
+        console.warn(
+          LOG_PREFIX,
+          'Falha ao inspecionar o handler do botão.',
+          err,
+        );
       }
     }
-    logger.debug(`Buttons inspected=${inspected} updated=${updatedCount}`);
+    console.log(
+      LOG_PREFIX,
+      `Botões analisados=${inspected} atualizados=${updatedCount}`,
+    );
     return updatedCount;
   }
 
@@ -523,17 +543,24 @@
           form.appendChild(input);
           inputsAdded += 1;
         } catch (err) {
-          logger.warn('Failed appending hidden form input.', err);
+          console.warn(
+            LOG_PREFIX,
+            'Falha ao anexar input hidden ao formulário.',
+            err,
+          );
         }
       });
     }
-    logger.debug(`Forms inspected=${inspected} inputsAdded=${inputsAdded}`);
+    console.log(
+      LOG_PREFIX,
+      `Formulários analisados=${inspected} inputsIncluídos=${inputsAdded}`,
+    );
     return inputsAdded;
   }
 
   try {
     start();
   } catch (err) {
-    logger.warn('Unexpected error during script start.', err);
+    console.error(LOG_PREFIX, 'Erro inesperado durante a inicialização.', err);
   }
 })();
