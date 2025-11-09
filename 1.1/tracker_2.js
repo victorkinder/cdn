@@ -40,7 +40,6 @@
       return;
     }
 
-    const mxcodeFlagged = hasMxcode(window.location && window.location.search);
     const hasURLSupport =
       typeof URL === 'function' && typeof URLSearchParams === 'function';
 
@@ -78,17 +77,9 @@
         LOG_PREFIX,
         'Iniciando ciclo de propagação para links, botões e forms.',
       );
-      const anchorsUpdated = propagateAnchors(
-        sessionParams,
-        mxcodeFlagged,
-        hasURLSupport,
-      );
-      const buttonsUpdated = propagateButtons(
-        sessionParams,
-        mxcodeFlagged,
-        hasURLSupport,
-      );
-      const formsUpdated = propagateForms(sessionParams, mxcodeFlagged);
+      const anchorsUpdated = propagateAnchors(sessionParams, hasURLSupport);
+      const buttonsUpdated = propagateButtons(sessionParams, hasURLSupport);
+      const formsUpdated = propagateForms(sessionParams);
       console.log(
         LOG_PREFIX,
         'Propagação finalizada.',
@@ -111,9 +102,36 @@
     return CRAWLER_PATTERNS.some((pattern) => pattern.test(ua));
   }
 
-  function hasMxcode(search) {
-    if (!search) return false;
-    return search.indexOf('mxcode=1') !== -1;
+  function attributeIndicatesMxhref(value) {
+    if (value === null || value === undefined) return false;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) {
+      return true;
+    }
+    return normalized === '1' || normalized === 'true' || normalized === 'yes';
+  }
+
+  function elementHasMxhrefFlag(element) {
+    if (element && typeof element.dataset === 'object' && element.dataset) {
+      if (typeof element.dataset.mxhref !== 'undefined') {
+        if (attributeIndicatesMxhref(element.dataset.mxhref)) {
+          return true;
+        }
+      }
+    }
+
+    if (element && typeof element.getAttribute === 'function') {
+      const dataAttr = element.getAttribute('data-mxhref');
+      if (attributeIndicatesMxhref(dataAttr)) {
+        return true;
+      }
+      const directAttr = element.getAttribute('mxhref');
+      if (attributeIndicatesMxhref(directAttr)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   function captureParamsFromLocation(search) {
@@ -183,17 +201,6 @@
     return mapped ? String(mapped) : key;
   }
 
-  function determinePrimaryKey(params) {
-    for (let i = 0; i < CLICK_ID_KEYS.length; i += 1) {
-      const key = CLICK_ID_KEYS[i];
-      const value = params[key];
-      if (value !== undefined && value !== null && value !== '') {
-        return key;
-      }
-    }
-    return null;
-  }
-
   function prepareParamEntries(params) {
     const entries = [];
     TRACK_KEYS.forEach((key) => {
@@ -208,53 +215,6 @@
       });
     });
     return entries;
-  }
-
-  function buildReplacementQuery(primaryKey, otherParams) {
-    const segments = [];
-    const addedKeys = new Set();
-
-    const appendSegment = (key, value) => {
-      if (value === undefined || value === null || value === '') return;
-      const destinationKey = resolveDestinationKey(key);
-      if (!destinationKey || addedKeys.has(destinationKey)) return;
-      const normalizedValue = normalizeParamValue(key, value);
-      segments.push(
-        `${encodeURIComponent(destinationKey)}=${encodeURIComponent(
-          normalizedValue,
-        )}`,
-      );
-      addedKeys.add(destinationKey);
-    };
-
-    if (primaryKey) {
-      const primaryValue = activeSessionParams[primaryKey];
-      appendSegment(primaryKey, primaryValue);
-    }
-
-    const normalizedParams = Array.isArray(otherParams) ? otherParams : [];
-    normalizedParams.forEach((entry) => {
-      if (!entry) return;
-      let key;
-      let value;
-
-      if (Array.isArray(entry)) {
-        [key, value] = entry;
-      } else if (typeof entry === 'object') {
-        key = entry.key || entry.name;
-        value =
-          entry.value !== undefined ? entry.value : activeSessionParams[key];
-      }
-
-      if (!key) return;
-      appendSegment(key, value);
-    });
-
-    if (!segments.length) {
-      return 'mxcode=1';
-    }
-
-    return segments.join('&');
   }
 
   function escapeRegExp(value) {
@@ -300,9 +260,9 @@
     }
   }
 
-  function shouldProcessTarget(targetUrl, pageMxcode, hasURLSupport) {
+  function shouldProcessTarget(targetUrl, targetMxhrefFlagged, hasURLSupport) {
+    if (!targetMxhrefFlagged) return false;
     if (!targetUrl) return false;
-    if (!pageMxcode && !hasMxcode(targetUrl)) return false;
     if (!hasURLSupport) return true;
 
     try {
@@ -324,17 +284,6 @@
 
   function appendParams(url, params, hasURLSupport) {
     const paramEntries = prepareParamEntries(params);
-    const primaryKey = determinePrimaryKey(params);
-    const otherParamsPayload = paramEntries
-      .filter((entry) => entry.key !== primaryKey)
-      .map((entry) => ({ key: entry.key, value: params[entry.key] }));
-
-    if (typeof url === 'string' && url.indexOf('mxcode=1') !== -1) {
-      const replacement = buildReplacementQuery(primaryKey, otherParamsPayload);
-      if (replacement) {
-        return url.replace('mxcode=1', replacement);
-      }
-    }
 
     if (!hasURLSupport) {
       return appendParamsManually(url, paramEntries);
@@ -421,14 +370,17 @@
     }
   }
 
-  function propagateAnchors(params, pageMxcode, hasURLSupport) {
+  function propagateAnchors(params, hasURLSupport) {
     const anchors = document.getElementsByTagName('a');
     let inspected = 0;
     let updatedCount = 0;
     for (let i = 0; i < anchors.length; i += 1) {
       const anchor = anchors[i];
       inspected += 1;
-      const href = anchor && anchor.getAttribute && anchor.getAttribute('href');
+      const href =
+        anchor && typeof anchor.getAttribute === 'function'
+          ? anchor.getAttribute('href')
+          : null;
       if (
         !href ||
         href.startsWith('mailto:') ||
@@ -437,7 +389,8 @@
       ) {
         continue;
       }
-      if (!shouldProcessTarget(href, pageMxcode, hasURLSupport)) continue;
+      const anchorHasFlag = elementHasMxhrefFlag(anchor);
+      if (!shouldProcessTarget(href, anchorHasFlag, hasURLSupport)) continue;
 
       try {
         const originalHash = anchor.hash || '';
@@ -460,7 +413,7 @@
     return updatedCount;
   }
 
-  function propagateButtons(params, pageMxcode, hasURLSupport) {
+  function propagateButtons(params, hasURLSupport) {
     const buttons = document.getElementsByTagName('button');
     let inspected = 0;
     let updatedCount = 0;
@@ -480,10 +433,9 @@
         );
         const targetUrl =
           (locationMatch && locationMatch[1]) || (openMatch && openMatch[1]);
-        if (
-          !targetUrl ||
-          !shouldProcessTarget(targetUrl, pageMxcode, hasURLSupport)
-        )
+        if (!targetUrl) continue;
+        const buttonHasFlag = elementHasMxhrefFlag(button);
+        if (!shouldProcessTarget(targetUrl, buttonHasFlag, hasURLSupport))
           continue;
 
         const updatedUrl = appendParams(targetUrl, params, hasURLSupport);
@@ -519,15 +471,14 @@
     return updatedCount;
   }
 
-  function propagateForms(params, pageMxcode) {
+  function propagateForms(params) {
     const forms = document.getElementsByTagName('form');
     let inspected = 0;
     let inputsAdded = 0;
     for (let i = 0; i < forms.length; i += 1) {
       const form = forms[i];
-      const shouldProcess =
-        pageMxcode || hasMxcode(form.getAttribute('action') || '');
-      if (!shouldProcess) continue;
+      const formHasFlag = elementHasMxhrefFlag(form);
+      if (!formHasFlag) continue;
       inspected += 1;
       TRACK_KEYS.forEach((key) => {
         const value = params[key];
