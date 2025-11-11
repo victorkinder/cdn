@@ -11,8 +11,10 @@
 
 (function presellParamBootstrap() {
   const CLICK_ID_KEYS = ['gclid', 'msclkid', 'fbclid'];
-  const STORAGE_KEY = 'presell_params';
-  const STORAGE_EXPIRY_KEY = 'presell_params_expiry';
+  const STORAGE_KEY_PREFIX = 'presell_params';
+  const STORAGE_EXPIRY_KEY_PREFIX = 'presell_params_expiry';
+  const LEGACY_STORAGE_KEY = STORAGE_KEY_PREFIX;
+  const LEGACY_STORAGE_EXPIRY_KEY = STORAGE_EXPIRY_KEY_PREFIX;
   const STORAGE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
   const CRAWLER_PATTERNS = [
     /googlebot\//i,
@@ -30,6 +32,7 @@
    */
   function start() {
     console.log(LOG_PREFIX, 'Iniciando propagação de parâmetros.');
+    const currentPathNamespace = getCurrentPathNamespace();
 
     if (isCrawler(window.navigator && window.navigator.userAgent)) {
       console.log(
@@ -49,7 +52,7 @@
 
     let sessionParams = Object.keys(urlParams).length
       ? urlParams
-      : readStoredParams();
+      : readStoredParams(currentPathNamespace);
 
     if (!sessionParams || !Object.keys(sessionParams).length) {
       console.log(
@@ -60,7 +63,7 @@
     }
 
     if (Object.keys(urlParams).length) {
-      storeParams(urlParams);
+      storeParams(currentPathNamespace, urlParams);
       sessionParams = urlParams;
     }
 
@@ -305,36 +308,111 @@
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function readStoredParams() {
-    try {
-      const expiryRaw = window.localStorage.getItem(STORAGE_EXPIRY_KEY);
-      const dataRaw = window.localStorage.getItem(STORAGE_KEY);
-      if (!expiryRaw || !dataRaw) return {};
-      const expiry = parseInt(expiryRaw, 10);
-      if (Number.isNaN(expiry) || Date.now() > expiry) {
-        window.localStorage.removeItem(STORAGE_KEY);
-        window.localStorage.removeItem(STORAGE_EXPIRY_KEY);
-        return {};
-      }
-      const parsed = JSON.parse(dataRaw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (err) {
-      console.warn(
-        LOG_PREFIX,
-        'Não foi possível ler parâmetros armazenados.',
-        err,
-      );
-      return {};
+  function normalizePathname(pathname) {
+    if (typeof pathname !== 'string' || !pathname.trim()) {
+      return '/';
     }
+    let normalized = pathname.trim();
+    if (!normalized.startsWith('/')) {
+      normalized = `/${normalized}`;
+    }
+    normalized = normalized.replace(/\/+$/, '');
+    if (!normalized) {
+      return '/';
+    }
+    return normalized;
   }
 
-  function storeParams(params) {
+  function buildStorageKey(base, namespace) {
+    if (!namespace) {
+      return base;
+    }
+    return `${base}::${namespace}`;
+  }
+
+  function getCurrentPathNamespace() {
+    if (typeof window === 'undefined' || !window.location) {
+      return 'root';
+    }
+    const { pathname } = window.location;
+    const normalizedPath = normalizePathname(pathname);
+    return encodeURIComponent(normalizedPath);
+  }
+
+  function readStoredParams(pathNamespace) {
+    const candidates = [];
+    if (pathNamespace) {
+      candidates.push({
+        dataKey: buildStorageKey(STORAGE_KEY_PREFIX, pathNamespace),
+        expiryKey: buildStorageKey(STORAGE_EXPIRY_KEY_PREFIX, pathNamespace),
+        migrateToNamespace: false,
+      });
+    }
+    candidates.push({
+      dataKey: LEGACY_STORAGE_KEY,
+      expiryKey: LEGACY_STORAGE_EXPIRY_KEY,
+      migrateToNamespace: pathNamespace,
+    });
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      try {
+        const expiryRaw = window.localStorage.getItem(candidate.expiryKey);
+        const dataRaw = window.localStorage.getItem(candidate.dataKey);
+        if (!expiryRaw || !dataRaw) {
+          continue;
+        }
+        const expiry = parseInt(expiryRaw, 10);
+        if (Number.isNaN(expiry) || Date.now() > expiry) {
+          window.localStorage.removeItem(candidate.dataKey);
+          window.localStorage.removeItem(candidate.expiryKey);
+          continue;
+        }
+        const parsed = JSON.parse(dataRaw);
+        if (parsed && typeof parsed === 'object') {
+          if (
+            candidate.migrateToNamespace &&
+            pathNamespace &&
+            candidate.dataKey === LEGACY_STORAGE_KEY
+          ) {
+            storeParams(pathNamespace, parsed);
+            window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+            window.localStorage.removeItem(LEGACY_STORAGE_EXPIRY_KEY);
+          }
+          return parsed;
+        }
+      } catch (err) {
+        console.warn(
+          LOG_PREFIX,
+          'Não foi possível ler parâmetros armazenados.',
+          err,
+        );
+      }
+    }
+    return {};
+  }
+
+  function storeParams(pathNamespace, params) {
+    if (!pathNamespace) {
+      console.warn(
+        LOG_PREFIX,
+        'Namespace de caminho inválido para salvar parâmetros.',
+      );
+      return;
+    }
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(params));
+      const dataKey = buildStorageKey(STORAGE_KEY_PREFIX, pathNamespace);
+      const expiryKey = buildStorageKey(
+        STORAGE_EXPIRY_KEY_PREFIX,
+        pathNamespace,
+      );
+      window.localStorage.setItem(dataKey, JSON.stringify(params));
       window.localStorage.setItem(
-        STORAGE_EXPIRY_KEY,
+        expiryKey,
         String(Date.now() + STORAGE_DURATION_MS),
       );
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_EXPIRY_KEY);
     } catch (err) {
       console.warn(
         LOG_PREFIX,
