@@ -11,10 +11,9 @@
 
 (function presellParamBootstrap() {
   const CLICK_ID_KEYS = ['gclid', 'msclkid', 'fbclid'];
-  const STORAGE_KEY_PREFIX = 'presell_params';
-  const STORAGE_EXPIRY_KEY_PREFIX = 'presell_params_expiry';
-  const LEGACY_STORAGE_KEY = STORAGE_KEY_PREFIX;
-  const LEGACY_STORAGE_EXPIRY_KEY = STORAGE_EXPIRY_KEY_PREFIX;
+  const STORAGE_KEY_PREFIX = 'minerx';
+  const LEGACY_STORAGE_KEY = 'presell_params';
+  const LEGACY_STORAGE_EXPIRY_KEY = 'presell_params_expiry';
   const STORAGE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
   const CRAWLER_PATTERNS = [
     /googlebot\//i,
@@ -33,6 +32,9 @@
   function start() {
     console.log(LOG_PREFIX, 'Iniciando propagação de parâmetros.');
     const currentPathNamespace = getCurrentPathNamespace();
+    if (!currentPathNamespace) {
+      console.warn(LOG_PREFIX, 'Não foi possível determinar namespace atual.');
+    }
 
     if (isCrawler(window.navigator && window.navigator.userAgent)) {
       console.log(
@@ -323,28 +325,28 @@
     return normalized;
   }
 
-  function buildStorageKey(base, namespace) {
-    if (!namespace) {
-      return base;
-    }
-    return `${base}::${namespace}`;
-  }
-
   function getCurrentPathNamespace() {
     if (typeof window === 'undefined' || !window.location) {
-      return 'root';
+      return null;
     }
-    const { pathname } = window.location;
+    const { hostname, pathname } = window.location;
+    const normalizedHost =
+      typeof hostname === 'string' && hostname.trim()
+        ? hostname.trim().toLowerCase()
+        : 'localhost';
     const normalizedPath = normalizePathname(pathname);
-    return encodeURIComponent(normalizedPath);
+    if (normalizedPath === '/') {
+      return normalizedHost;
+    }
+    return `${normalizedHost}${normalizedPath}`;
   }
 
   function readStoredParams(pathNamespace) {
     const candidates = [];
     if (pathNamespace) {
       candidates.push({
-        dataKey: buildStorageKey(STORAGE_KEY_PREFIX, pathNamespace),
-        expiryKey: buildStorageKey(STORAGE_EXPIRY_KEY_PREFIX, pathNamespace),
+        dataKey: buildStorageDataKey(pathNamespace),
+        expiryKey: buildStorageExpiryKey(pathNamespace),
         migrateToNamespace: false,
       });
     }
@@ -375,7 +377,9 @@
             pathNamespace &&
             candidate.dataKey === LEGACY_STORAGE_KEY
           ) {
-            storeParams(pathNamespace, parsed);
+            if (pathNamespace) {
+              storeParams(pathNamespace, parsed);
+            }
             window.localStorage.removeItem(LEGACY_STORAGE_KEY);
             window.localStorage.removeItem(LEGACY_STORAGE_EXPIRY_KEY);
           }
@@ -391,21 +395,24 @@
     }
     return {};
   }
+  function buildStorageDataKey(namespace) {
+    if (!namespace) return null;
+    return `${STORAGE_KEY_PREFIX}_${namespace}`;
+  }
+
+  function buildStorageExpiryKey(namespace) {
+    if (!namespace) return null;
+    return `${STORAGE_KEY_PREFIX}_${namespace}__expiry`;
+  }
 
   function storeParams(pathNamespace, params) {
-    if (!pathNamespace) {
-      console.warn(
-        LOG_PREFIX,
-        'Namespace de caminho inválido para salvar parâmetros.',
-      );
+    const dataKey = buildStorageDataKey(pathNamespace);
+    const expiryKey = buildStorageExpiryKey(pathNamespace);
+    if (!dataKey || !expiryKey) {
+      console.warn(LOG_PREFIX, 'Namespace inválido para salvar parâmetros.');
       return;
     }
     try {
-      const dataKey = buildStorageKey(STORAGE_KEY_PREFIX, pathNamespace);
-      const expiryKey = buildStorageKey(
-        STORAGE_EXPIRY_KEY_PREFIX,
-        pathNamespace,
-      );
       window.localStorage.setItem(dataKey, JSON.stringify(params));
       window.localStorage.setItem(
         expiryKey,
